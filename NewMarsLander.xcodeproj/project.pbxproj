@@ -7,14 +7,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2492BEAC1D008F53004A46D6 /* input.txt in CopyFiles */ = {isa = PBXBuildFile; fileRef = 24BCBCE81CFFE05E000A3A5F /* input.txt */; };
 		24DED97A1CFEA423006D1A6B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24DED9791CFEA423006D1A6B /* main.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		24DED9741CFEA423006D1A6B /* CopyFiles */ = {
+		2492BEAB1D008F4B004A46D6 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = /usr/share/man/man1/;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+				2492BEAC1D008F53004A46D6 /* input.txt in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		24DED9741CFEA423006D1A6B /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1;
 			dstSubfolderSpec = 0;
 			files = (
 			);
@@ -23,6 +34,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		24BCBCE81CFFE05E000A3A5F /* input.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = input.txt; sourceTree = "<group>"; };
 		24DED9761CFEA423006D1A6B /* NewMarsLander */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = NewMarsLander; sourceTree = BUILT_PRODUCTS_DIR; };
 		24DED9791CFEA423006D1A6B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -38,10 +50,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		24BCBCED1CFFF040000A3A5F /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				24BCBCE81CFFE05E000A3A5F /* input.txt */,
+			);
+			name = Resources;
+			path = NewMarsLander;
+			sourceTree = "<group>";
+		};
 		24DED96D1CFEA423006D1A6B = {
 			isa = PBXGroup;
 			children = (
 				24DED9781CFEA423006D1A6B /* NewMarsLander */,
+				24BCBCED1CFFF040000A3A5F /* Resources */,
 				24DED9771CFEA423006D1A6B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -72,6 +94,7 @@
 				24DED9721CFEA423006D1A6B /* Sources */,
 				24DED9731CFEA423006D1A6B /* Frameworks */,
 				24DED9741CFEA423006D1A6B /* CopyFiles */,
+				2492BEAB1D008F4B004A46D6 /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -241,6 +264,7 @@
 				24DED97F1CFEA423006D1A6B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
