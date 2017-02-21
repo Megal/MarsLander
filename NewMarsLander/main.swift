@@ -2,6 +2,17 @@
 
 import Foundation
 
+// MARK: - Dot Transform operation
+
+precedencegroup DotOperationPrecedence {
+	higherThan: MultiplicationPrecedence
+	assignment: true
+}
+infix operator .--> : DotOperationPrecedence
+public func .--> <U, V>(arg: U, transform: (U) -> V ) -> V {
+	return transform(arg)
+}
+
 // MARK: - Logging stuff
 public struct StderrOutputStream: TextOutputStream {
 	public mutating func write(_ string: String) { fputs(string, stderr) }
@@ -15,10 +26,14 @@ if let inputFile = Bundle.main.path(forResource: "input", ofType: "txt") {
 	freopen(inputFile, "r", stdin)
 }
 
-// Cartesian 2d
+// MARK: - Cartesian 2d
 typealias Int2d = (x: Int, y: Int)
 func +(a: Int2d, b: Int2d) -> Int2d { return (a.x+b.x, a.y+b.y) }
 func -(a: Int2d, b: Int2d) -> Int2d { return (a.x-b.x, a.y-b.y) }
+
+typealias Double2d = (x: Double, y: Double)
+func +(a: Double2d, b: Double2d) -> Double2d { return (a.x+b.x, a.y+b.y) }
+func -(a: Double2d, b: Double2d) -> Double2d { return (a.x-b.x, a.y-b.y) }
 
 
 // MARK: - Range extensions
@@ -320,6 +335,8 @@ struct Random {
 
 let random = Random()
 
+//MARK: - DNA
+
 struct Chromosome {
 
 	typealias Action = MarsLander.Action
@@ -327,9 +344,10 @@ struct Chromosome {
 
 	var genes = [Chromosome.neutralGene]
 	var ttl = -1
+	var blackBox: MarsLander?
 
-	static let neutralGene: GeneElement = (Action(rotate: 0, power: 0), duration: Chromosome.maxTTL)
-	static let maxTTL = 3000
+	static let neutralGene: GeneElement = (Action(rotate: 0, power: 0), Chromosome.maxTTL)
+	static let maxTTL = 300
 }
 
 extension Chromosome {
@@ -340,47 +358,200 @@ extension Chromosome {
 			genes.removeFirst()
 		}
 		if genes.isEmpty {
-			genes.insert((Action(rotate: 0, power: 0), duration: Chromosome.maxTTL), at: 0)
+			genes.insert(Chromosome.neutralGene, at: 0)
 			ttl = -1
 		} else {
 			ttl -= 1
 		}
 	}
+
+	func prefix(n: Int) -> Chromosome {
+		guard n > 0 else { return Chromosome(genes: [Chromosome.neutralGene], ttl: -1, blackBox: nil) }
+
+		var copyLength = 0
+		var copyGenes: [GeneElement] = []
+		for gene in genes {
+			if copyLength + gene.duration >= n {
+				copyGenes.append(GeneElement(action: gene.action, duration: n-copyLength))
+				break;
+			} else {
+				copyGenes.append(gene)
+				copyLength += gene.duration
+			}
+		}
+
+		return Chromosome(genes: copyGenes, ttl: -1, blackBox: nil)
+	}
+
+	func suffix(from: Int) -> Chromosome {
+		var skipped = 0
+		var copyGenes: [GeneElement] = []
+		for gene in genes {
+			if skipped + gene.duration < from {
+				skipped += gene.duration
+			} else {
+				let appendLength = skipped + gene.duration - from
+				copyGenes.append(GeneElement(action: gene.action, duration: appendLength))
+				skipped = from
+			}
+		}
+
+		if copyGenes.count == 0 { copyGenes.append(Chromosome.neutralGene) }
+		return Chromosome(genes: copyGenes, ttl: -1, blackBox: nil)
+	}
+
+	static func combine(head: Chromosome, tail: Chromosome, at cutPoint: Int) -> Chromosome {
+		var copied: [GeneElement] = []
+		var headCopiedLength = 0
+		for gene in head.genes {
+			if gene.duration + headCopiedLength < cutPoint {
+				copied.append(gene)
+				headCopiedLength += gene.duration
+			} else {
+				let cutGene = (action: gene.action, duration: cutPoint - headCopiedLength)
+				copied.append(cutGene)
+				break;
+			}
+		}
+
+		var tailSkippedLength = 0
+		for gene in tail.genes {
+			if tailSkippedLength >= cutPoint {
+				copied.append(gene)
+			} else if tailSkippedLength + gene.duration > cutPoint {
+				let cutLength = tailSkippedLength + gene.duration - cutPoint
+				let copingGene = (action: gene.action, duration: cutLength)
+				copied.append(copingGene)
+				tailSkippedLength += cutLength
+			} else {
+				tailSkippedLength += gene.duration
+			}
+		}
+
+		return Chromosome(genes: copied, ttl: -1, blackBox: nil)
+	}
 }
+
 
 struct Generation {
 	var current: [Chromosome] = []
-	let populationLimit = 100
+	var fitnessScore: [Double] = []
+
+	let populationLimit = 20
 	let crossingoverRate = 2
 	let mutationRate = 3
 	let world: World
 	var lander: MarsLander
+	var fitnessScored = false {
+		didSet { sorted = false	}
+	}
+
+	var sortedIndexes: [Int] = []
+	var sorted = false
+
+	var lastEvaluatedPath: [Double2d] = []
+	///0 is acceptable, >0 and more is worse
+	typealias ErrorFn = (MarsLander) -> Double
+	var fitnessFunc: [(fn: ErrorFn, weight: Double)] = []
 
 	init(world: World, lander: MarsLander) {
 		self.world = world
 		self.lander = lander
-		current.append(Chromosome(genes: [Chromosome.neutralGene], ttl: -1))
+		current.append(Chromosome(genes: [Chromosome.neutralGene], ttl: -1, blackBox: nil))
 	}
 }
 
 extension Generation {
 
 	mutating func evalTTL() {
+		guard fitnessScored == false else { return }
+
 		for (currentIndex, sample) in current.enumerated() {
 			guard sample.ttl < 0 else { continue }
 
 			evalTTL(&current[currentIndex])
 		}
+
+		evalFitness()
 	}
 
-	fileprivate mutating func evalTTL(_ chromosome: inout Chromosome) {
-		var evolvingLander = lander
+	mutating func evalFitness() {
+		guard !fitnessScored else { return }
+		defer {
+			fitnessScored = true
+		}
+
+		guard case let N = current.count, N > 0 else { return }
+		fitnessScore = [Double](repeating: 1.0, count: N)
+
+		for (fn, denormWeight) in fitnessFunc {
+			let weight = denormWeight / Double(N)
+			let errors = current.map { $0.blackBox!.-->fn }
+			let indexes = (0..<N).map { (i: Int($0), e: errors[$0]) }
+			let worstFirst = indexes.sorted { $0.e > $1.e }
+
+			var worse = 0
+			for i in 1..<N {
+				let prev = worstFirst[i-1]
+				let cur = worstFirst[i]
+
+				if prev.e > 1e-9 + cur.e {
+					worse = i
+				}
+
+				fitnessScore[cur.i] += weight * Double(worse)
+			}
+		}
+	}
+
+	mutating func sort() {
+		guard fitnessScored else { assert(false, "you should call evalFitness() before this method"); return }
+		guard !sorted else { return }
+		defer {
+			sorted = true
+		}
+
+		guard case let N = current.count, N > 0 else { return }
+		sortedIndexes = (0..<N).map { Int($0) }
+			.sorted { (i, j) in
+				if fitnessScore[i] == fitnessScore[j] {
+					return current[i].ttl > current[j].ttl
+				} else {
+					return fitnessScore[i] > fitnessScore[j]
+				}
+			}
+	}
+
+	mutating func evalBest() {
+		evalTTL()
+		sort()
+		evalTTL(&current[sortedIndexes[0]])
+	}
+
+	mutating func evalSuboptimal(place n: Int ) {
+		evalTTL()
+		sort()
+		evalTTL(&current[sortedIndexes[n]])
+	}
+
+	private mutating func evalTTL(_ chromosome: inout Chromosome) {
+		let oldTTL = chromosome.ttl
+		defer {
+			assert(chromosome.blackBox != nil, "blackbox is necessary")
+			if chromosome.ttl != oldTTL || oldTTL < 0 {
+				fitnessScored = false
+			}
+		}
+
+		lastEvaluatedPath.removeAll()
+		var evolvingLander = lander; lastEvaluatedPath.append((x: evolvingLander.X, y: evolvingLander.Y))
 		var ttl = 0
 		for (geneIndex, (action: action, duration: duration)) in chromosome.genes.enumerated() {
 			for turnSameAction in 0..<duration {
 				ttl += 1
 				let nextLander = world.simulate(marsLander: evolvingLander, action: action)
 				defer {
+					lastEvaluatedPath.append((x: evolvingLander.X, y: evolvingLander.Y))
 					evolvingLander = nextLander
 				}
 
@@ -388,173 +559,132 @@ extension Generation {
 
 				let isLanded = world.testLanded(marsLander: nextLander)
 				if isLanded {
-					chromosome.ttl = Chromosome.maxTTL
+					chromosome.ttl = Chromosome.maxTTL + nextLander.fuel
+					chromosome.blackBox = nextLander
 					return
 				} else {
 					let alternativeLander = world.simulate(marsLander: evolvingLander, action: Chromosome.neutralGene.action)
 					if world.testLanded(marsLander: alternativeLander) {
-						// TODO: cut tail and add neutral gene
-						assert(false)
+						let prefixChromosome = chromosome.prefix(n: ttl-1)
+						chromosome = prefixChromosome
+						chromosome.ttl = Chromosome.maxTTL + alternativeLander.fuel
+						chromosome.blackBox = alternativeLander
 					} else {
-						// TODO: cut tail and maybe? add neutral gene
 						chromosome.ttl = ttl
+						chromosome.blackBox = nextLander
 						return
 					}
 				}
 			}
 		}
+		log("Assertion acieed with chromosome: \(chromosome)")
 		assert(false)
 	}
 }
 
 extension Generation {
 
-	func generateRandomAction() -> Chromosome.Action {
+	func randomAction() -> Chromosome.Action {
 		return Chromosome.Action(rotate: random[-90...90], power: random[0...4])
+	}
+
+	func generateMonoChromosome(with action: Chromosome.Action) -> Chromosome {
+		return Chromosome(genes: [(action: action, duration: Chromosome.maxTTL)], ttl: -1, blackBox: nil)
 	}
 
 	mutating func populateToLimitWithRandom() {
 		current.reserveCapacity(populationLimit * 2)
 		for _ in current.count..<populationLimit {
 			let newChromosome = Chromosome(
-				genes: [(action: generateRandomAction(), duration: Chromosome.maxTTL)],
-				ttl: -1)
+				genes: [(action: randomAction(), duration: Chromosome.maxTTL)],
+				ttl: -1,
+				blackBox: nil)
 			current.append(newChromosome)
 		}
 
-		evalTTL()
+		fitnessScored = false
 	}
+
+	mutating func addMutantsWithRandomTailOrHead() {
+		let countBeforeMutation = current.count
+		for i in 0..<countBeforeMutation {
+			let sample = current[i]
+			current.append(makeMutant(sample, species: .HeadMutant))
+			current.append(makeMutant(sample, species: .TailMutant))
+			current.append(makeMutant(sample, species: .BodyMutant))
+		}
+
+		fitnessScored = false
+	}
+
+	enum MutantSpecies {
+		case TailMutant
+		case HeadMutant
+		case BodyMutant
+	}
+
+	func makeMutant(_ sample: Chromosome, species: MutantSpecies) -> Chromosome {
+		let mono = generateMonoChromosome(with: randomAction())
+
+		guard case let ttl = UInt32(sample.ttl), sample.ttl > 2 else { return mono }
+		let cut1 = random[1 ... Int(ttl/2)] //Int(1 + arc4random_uniform(ttl / 2))
+		let cut2 = random[1 + Int(ttl/2) ... Int(ttl) - 1] //Int(1 + (ttl + 1) / 2 + arc4random_uniform((ttl - 2) / 2))
+
+		switch( species ) {
+		case .HeadMutant: return Chromosome.combine(head: mono, tail: sample, at: cut1)
+		case .TailMutant: return Chromosome.combine(head: sample, tail: mono, at: cut2)
+		case .BodyMutant: do {
+			let withHead = Chromosome.combine(head: sample, tail: mono, at: cut1)
+			let withHeadAndTail = Chromosome.combine(head: withHead, tail: sample, at: cut2)
+			return withHeadAndTail
+			}
+		}
+	}
+
 
 	mutating func reducePopulation() {
-		reducePopulation(populationLimit)
+		reducePopulation(to: populationLimit)
 	}
 
-	mutating func reducePopulation(_ limit: Int) {
+	mutating func reducePopulation(to limit: Int) {
 		guard current.count > limit else { return }
 
-		current.sort{ (a, b) in a.ttl > b.ttl }
-		current.removeSubrange(limit..<current.count)
+		evalTTL()
+		sort()
+		let newCurrent = sortedIndexes
+			.prefix(limit)
+			.map { current[$0] }
+		current = newCurrent
+		fitnessScored = false
 	}
 
-	func bestChomosome() -> Chromosome { return current.first! }
+	mutating func bestChomosome() -> Chromosome {
+		evalTTL()
+		sort()
+		return current[sortedIndexes[0]]
+	}
 
-	mutating func nextTurn(marsLander next: MarsLander) {
+	mutating func incrementAge(marsLander next: MarsLander) {
 		lander = next
 		for i in 0..<current.count {
 			current[i].incrementAge()
 		}
+
+		fitnessScored = false
 	}
 }
 
-//struct RandomDoubleGenerator {
-//	private init() { srand48(Int(arc4random())) }
-//	static let singleton = RandomDoubleGenerator()
-//}
-//
-////! Get double in desired interval
-//extension RandomDoubleGenerator {
-//
-//	struct Arc4Ranges {
-//		static let СlosedDenominator: Double = Double(UInt32.max)
-//		static let HalfOpenDenominator: Double = Double(Int64(UInt32.max) + 1)
-//	}
-//
-//	subscript(interval: ClosedInterval<Double>) -> Double {
-//		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.СlosedDenominator
-//		let width = interval.end - interval.start
-//		let scaled = normalized * width
-//
-//		return interval.start + scaled
-//	}
-//
-//	subscript(interval: HalfOpenInterval<Double>) -> Double {
-//		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.HalfOpenDenominator
-//		let width = interval.end - interval.start
-//		let scaled = normalized * width
-//
-//		return interval.start + scaled
-//	}
-//}
+extension Generation {
 
-//extension IntervalType {
-//
-//	public var hashValue: Int {
-//		if let start = self.start as? NSObject, let end = self.end as? NSObject {
-//			let halfshift = MemoryLayout<Int>.size*4
-//			return start.hashValue ^ ((end.hashValue << halfshift) | (end.hashValue >> halfshift))
-//			//infix operator .--> {
-//			//associativity left
-//			//precedence 152
-//			//}
-//			////! Apply operation using dot syntax
-//			//public func .--> <U, V>(arg: U, transform: (U) -> V ) -> V {
-//			//    return transform(arg)
-//			//}
-//		} else {
-//			return 0
-//		}
-//	}
-//}
-//
-//extension Range: Hashable {}
-//extension ClosedRange: Hashable {}
+	mutating func evolution(cycles n: Int) {
+		for _ in 0..<n {
+			reducePopulation(to: populationLimit/5)
+			addMutantsWithRandomTailOrHead()
+			populateToLimitWithRandom()
+		}
+	}
+}
 
-//
-////("a"..."b" as ClosedInterval).hashValue
-////(0...1 as ClosedInterval).hashValue
-////(1e-2...1e+3 as ClosedInterval).hashValue
-////
-////(0.0..<1.0).hashValue
-////(1.0..<2.0).hashValue
-////(2.0..<3.0).hashValue
-////(0.0..<1.0)==(1.0..<2.0)
-////
-////var dictionary = [
-////	0.0..<1.0 : "Okay",
-////	1.0..<2.0 : "Better",
-////	2.0..<3.0 : "Perfect"]
-////var dict2: Dictionary<HalfOpenInterval<Double>, String> = [
-////	0.0..<1.0 : "Okay",
-////	1.0..<2.0 : "Better",
-////	2.0..<3.0 : "Perfect"]
-////
-////var dict3: Dictionary<HalfOpenInterval<Double>, String> = [:]
-////dict3[0.0..<1.0] = "Meh"
-////
-////for (range, value) in dict3 {
-////	print("\(value) is assign to \(range)")
-////}
-//
-//
-////struct WeightedRandom<T> {
-////
-////	private var probabilityMap: [HalfOpenInterval<Double> : T] = [:]
-////	private var weightSum = 0.0
-////}
-////
-////enum WeightedRandomError : ErrorType {
-////	case InvalidArgument
-////}
-////
-////extension WeightedRandom {
-////
-////	mutating func add(value: T, weight: Double) throws {
-////		guard weight.isNormal && weight > 0 else { throw WeightedRandomError.InvalidArgument }
-////
-////		let newWeightSum = weightSum + weight
-////		probabilityMap[weightSum ..< newWeightSum] = value
-////		weightSum = newWeightSum
-////	}
-////
-////	func getRandomObject() -> T? {
-////		guard !probabilityMap.isEmpty else { return nil }
-////
-////		let randomizer = RandomDoubleGenerator.singleton
-////		randomizer[0 ..< weightSum]
-////		// TODO:
-////		return nil
-////	}
-////}
 
 let world = World.parseFromInput()
 var action: MarsLander.Action!
@@ -573,7 +703,7 @@ for turn in 0..<3000 {
 	var lander = MarsLander(parseFromInput: line)!
 	log("Read   Mars Lander: \(lander)")
 	if let landerExpected = landerExpected {
-		if lander - landerExpected < 1.0 {
+		if lander - landerExpected < 2.0 {
 			lander = landerExpected
 		} else {
 			log("Not close to expected, using data from input")
@@ -582,25 +712,80 @@ for turn in 0..<3000 {
 
 	let testAngle = { (angle: Int) in abs(lander.rotate - angle) < 90 ? true : false }
 
+	// Apply DNA using fitness evaluation functions
 	if turn == 0 {
 		log("Calculating traectory \((lander.X, lander.Y)) -> \(world.target): ...")
 		generation = Generation(world: world, lander: lander)
-		for _ in 0..<30 {
-			generation.reducePopulation(generation.populationLimit/2)
-			generation.populateToLimitWithRandom()
-			generation.evalTTL()
+
+		let fitnessVX: Generation.ErrorFn = { (lander) in
+			if (-20...20) ~= lander.hSpeed {
+				return 0.0
+			} else {
+				return fabs(lander.hSpeed) - 20
+			}
 		}
-	} else {
-		generation.nextTurn(marsLander: lander)
+		let fitnessVY: Generation.ErrorFn = { (lander) in
+			if (-40...0) ~= lander.vSpeed {
+				return 0.0
+			} else {
+				return fabs(lander.vSpeed) - 40
+			}
+		}
+		let straightLanding: Generation.ErrorFn = { (lander) in
+			if lander.rotate == 0 {
+				return 0.0
+			} else {
+				return 1.0
+			}
+		}
+		let radar: Generation.ErrorFn = { (lander) in
+			let (x, y) = (lander.X, lander.Y)
+			if (0...7000) ~= x && (0...3000) ~= y {
+				return 0.0
+			} else {
+				return 1.0
+			}
+		}
+		let targetX = world.target.x
+		let deltaX: Generation.ErrorFn = { (lander: MarsLander) in
+			let dist = fabs(targetX - lander.X)
+			if dist < 500.0 {
+				return 0.0
+			} else {
+				return Double(Int((dist - 500.0) / 10.0))
+			}
+		}
+		let gluttony: Generation.ErrorFn = { (lander: MarsLander) in
+			return Double(lander.fuel)
+		}
+		let deadman: Generation.ErrorFn = { (lander: MarsLander) in
+			if lander.fuel <= 100 {
+				return 0.0
+			} else {
+				return 1.0 / Double(lander.fuel - 100)
+			}
+		}
+
+		generation.fitnessFunc.append((fn: fitnessVX, weight: 4.0))
+		generation.fitnessFunc.append((fn: fitnessVY, weight: 4.0))
+		generation.fitnessFunc.append((fn: straightLanding, weight: 0.5))
+		generation.fitnessFunc.append((fn: radar, weight: 8.0))
+		generation.fitnessFunc.append((fn: deltaX, weight: 10.0))
+		generation.fitnessFunc.append((fn: gluttony, weight: 10.0))
+		generation.fitnessFunc.append((fn: deadman, weight: 5.0))
+
+		generation.populateToLimitWithRandom()
+		generation.evolution(cycles: 10)
+	}
+	else {
+		generation.incrementAge(marsLander: lander)
 		generation.evalTTL()
-		for _ in 0..<20 {
-			generation.reducePopulation(generation.populationLimit/2)
-			generation.populateToLimitWithRandom()
-			generation.evalTTL()
-		}
+		generation.evolution(cycles: 3)
+		log("fitnessScore = \(generation.fitnessScore)")
 	}
 
-	action = generation.bestChomosome().genes[0].action
+	let best = generation.bestChomosome()
+	action = best.genes[0].action
 
 	landerExpected = world.simulate(marsLander: lander, action: action)
 }
