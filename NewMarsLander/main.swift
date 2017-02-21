@@ -2,68 +2,64 @@
 
 import Foundation
 
-getpid()
-//system("lsof -p \(getpid()) >&2")
-//system("cat \"\(__FILE__)\" >&2")
-
-public struct StderrOutputStream: OutputStreamType {
-	public mutating func write(string: String) { fputs(string, stderr) }
+// MARK: - Logging stuff
+public struct StderrOutputStream: TextOutputStream {
+	public mutating func write(_ string: String) { fputs(string, stderr) }
 }
 public var errStream = StderrOutputStream()
+func log(_ message: String) {	print(message, to: &errStream) }
+func fatal(_ message: String = "Fatal error!") -> Never  { log(message); abort() }
 
-func log(message: String) {	debugPrint("I: "+message, toStream: &errStream) }
-@noreturn func fatal(message: String = "E: Some fatal error") { log(message); abort() }
-
-if let inputFile = NSBundle.mainBundle().pathForResource("input", ofType: "txt") {
+// Local Tests
+if let inputFile = Bundle.main.path(forResource: "input", ofType: "txt") {
 	freopen(inputFile, "r", stdin)
 }
 
+// Cartesian 2d
 typealias Int2d = (x: Int, y: Int)
 func +(a: Int2d, b: Int2d) -> Int2d { return (a.x+b.x, a.y+b.y) }
 func -(a: Int2d, b: Int2d) -> Int2d { return (a.x-b.x, a.y-b.y) }
 
-func dist<T where T:Comparable, T:Strideable>(a: T, _ b: T) -> T.Stride {
-	if a < b {
-		return b - a
-	}
-	else {
-		return a - b
+
+// MARK: - Range extensions
+
+extension Range where Bound: FloatingPoint {
+
+	/// Adds an ε-neighboorhood to create a safe zone for calculation errors
+	func extended(by epsilon: Bound = Bound.ulpOfOne.squareRoot()) -> Range {
+
+		return (self.lowerBound.nextDown-epsilon ..< self.upperBound.nextUp+epsilon)
 	}
 }
 
-func sign<T where T:IntegerLiteralConvertible, T:Comparable>(number: T) -> T {
-	if number >= 0 {
-		return 1
-	} else {
-		return -1
+extension ClosedRange where Bound: FloatingPoint {
+
+	/// Adds an ε-neighboorhood to create a safe zone for calculation errors
+	func extended(by epsilon: Bound = Bound.ulpOfOne.squareRoot()) -> ClosedRange {
+
+		return (self.lowerBound.nextDown-epsilon ... self.upperBound.nextUp+epsilon)
 	}
 }
 
-func clamp(number: Int, range: Range<Int>) -> Int? {
-	guard let min = range.minElement(), max = range.maxElement() else {
-		return nil
-	}
-	if number < min {
-		return min
-	} else if number >= max {
-		return max
-	} else {
-		return number
-	}
-}
+extension CountableClosedRange {
 
-func makeClosedIntervalWithEpsilonMargin(from a: Double, to b: Double, epsilon: Double = 1e-9) -> ClosedInterval<Double>?
-{
-	if a < b {
-		return (a-epsilon ... b+epsilon)
-	} else if b < a {
-		return (b-epsilon ... a+epsilon)
-	} else {
-		return nil
+	/// Clamps a value in range
+	func clamp(_ value: Bound) -> Bound {
+
+		if value <= lowerBound {
+			return lowerBound
+		}
+		else if value >= upperBound {
+			return upperBound
+		}
+		else {
+			return value
+		}
 	}
 }
 
 struct MarsLander {
+
 	var X: Double
 	var Y: Double
 	var hSpeed: Double
@@ -76,7 +72,7 @@ struct MarsLander {
 extension MarsLander {
 
 	init?(parseFromInput input: String) {
-		let input = input.componentsSeparatedByString(" ").flatMap { Int($0) }
+		let input = input.components(separatedBy: " ").flatMap { Int($0) }
 		guard input.count == 7 else {
 			return nil
 		}
@@ -93,18 +89,7 @@ extension MarsLander {
 	}
 }
 
-extension Range where Element : Comparable {
 
-	init(interval: ClosedInterval<Element>) {
-		startIndex = interval.start
-		endIndex = interval.end.successor()
-	}
-
-	init(interval: HalfOpenInterval<Element>) {
-		startIndex = interval.start
-		endIndex = interval.end
-	}
-}
 
 extension MarsLander {
 
@@ -112,56 +97,44 @@ extension MarsLander {
 		let rotate, power: Int
 	}
 
-	func clampedAction(action: Action) -> Action {
-		let powerClamp = Range(interval: (0...4 as ClosedInterval).clamp(power-1 ... power+1))
-		let rotateClamp = Range(interval: (-90...90 as ClosedInterval).clamp(rotate-15 ... rotate+15))
+	func clamped(action: Action) -> Action {
 
-		let clamped = Action(
-			rotate: clamp(action.rotate, range: rotateClamp)!,
-			power: clamp(action.power, range: powerClamp)!
+		let rotateClamp = (-90...90).clamped(to: rotate-15 ... rotate+15)
+		let powerClamp = (0...4).clamped(to: power-1 ... power+1)
+
+		return Action(
+			rotate: rotateClamp.clamp(action.rotate),
+			power: powerClamp.clamp(action.power)
 		)
-		return clamped
 	}
 }
+
+
+func -(_ a: MarsLander, _ b: MarsLander) -> Double {
+
+	let dvx = abs(a.hSpeed - b.hSpeed)
+	let dvy = abs(a.vSpeed - b.vSpeed)
+	let dx = abs(a.X - b.X)
+	let dy = abs(a.Y - b.Y)
+
+	return dx + dy + dvx + dvy
+}
+
 
 extension MarsLander: CustomStringConvertible {
 
-	static let OneDigitAfterDecimalPoint: (Double) -> String = {
-		let formatter = NSNumberFormatter()
+	static let doubleFormatter: (Double) -> String = {
+		let formatter = NumberFormatter()
 		formatter.minimumFractionDigits = 1
 		formatter.maximumFractionDigits = 1
 
-		return { (number: Double) -> String in formatter.stringFromNumber(NSNumber(double: number))! }
+		return { (number: Double) -> String in formatter.string(from: NSNumber(value: number as Double))! }
 	}()
 
 	var description: String {
-		let d1 = MarsLander.OneDigitAfterDecimalPoint
+		let d1 = MarsLander.doubleFormatter
 		return "at:(\(d1(X)), \(d1(Y))) v:(\(d1(hSpeed)), \(d1(vSpeed))) rot:\(rotate) pow:\(power) fuel:\(fuel)"
 	}
-}
-
-infix operator ~== { associativity left precedence 130 }
-//! Equals in acceptable precision
-func ~==(left: MarsLander, right: MarsLander) -> Bool {
-	guard left.fuel == right.fuel && left.rotate == right.rotate && left.power == right.power else {
-		return false
-	}
-
-	let epsilon = 1.0 + 1e-9
-	guard fabs(left.X - right.X) < epsilon else {
-		return false
-	}
-	guard fabs(left.Y - right.Y) < epsilon else {
-		return false
-	}
-	guard fabs(left.vSpeed - right.vSpeed) < epsilon else {
-		return false
-	}
-	guard fabs(left.hSpeed - right.hSpeed) < epsilon else {
-		return false
-	}
-
-	return true
 }
 
 struct World {
@@ -176,7 +149,7 @@ struct World {
 		let surfaceN = Int(readLine()!)! // the number of points used to draw the surface of Mars.
 		var surface = [Int2d]()
 		for _ in 0..<surfaceN {
-			let inputs = (readLine()!).componentsSeparatedByString(" ")
+			let inputs = (readLine()!).components(separatedBy: " ")
 			let landX = Int(inputs[0])! // X coordinate of a surface point. (0 to 6999)
 			let landY = Int(inputs[1])! // Y coordinate of a surface point. By linking all the points together in a sequential fashion, you form the surface of Mars.
 			surface.append((x: landX, y:landY))
@@ -189,10 +162,10 @@ struct World {
 		surface = initSurface
 
 		for point in surface {
-			maxY = [maxY, point.y].sort(>)[0]
+			maxY = [maxY, point.y].sorted(by: >)[0]
 		}
 
-		for (i, point1) in surface.enumerate() where i<surface.count-1 {
+		for (i, point1) in surface.enumerated() where i<surface.count-1 {
 			let point2 = surface[i+1]
 			if point1.y == point2.y {
 				target = (x: Double(point1.x + point2.x)/2, y: Double(point1.y))
@@ -211,8 +184,9 @@ extension World {
 		return t
 	}
 
-	func simulate(marsLander lander: MarsLander, action actionBeforeClamp: MarsLander.Action) -> MarsLander {
-		let action = lander.clampedAction(actionBeforeClamp)
+	func simulate(marsLander lander: MarsLander, action beforeClamp: MarsLander.Action) -> MarsLander {
+
+		let action = lander.clamped(action: beforeClamp)
 
 		let trueAngle = Double(90+action.rotate) * M_PI/180.0
 		let (dvx, dvy) = (
@@ -243,7 +217,8 @@ extension World {
 		for i in 0..<surface.count-1 {
 			let (x1, x2) = (Double(surface[i].x), Double(surface[i+1].x))
 			let (y1, y2) = (Double(surface[i].y), Double(surface[i+1].y))
-			if let x12 = makeClosedIntervalWithEpsilonMargin(from: x1, to: x2) where x12.contains(lander.X) {
+			let x12 = (x1...x2).extended()
+			if x12 ~= lander.X {
 				let t = (lander.X - x1) / (x2 - x1)
 				let yt = y1 + t*(y2 - y1)
 
@@ -255,8 +230,10 @@ extension World {
 	}
 
 	func testLanded(marsLander lander: MarsLander) -> Bool {
-		let x12 = makeClosedIntervalWithEpsilonMargin(from: target.x-500, to: target.x+500)!
-		let y12 = makeClosedIntervalWithEpsilonMargin(from: target.y-40, to: target.y)!
+
+		let x12 = (target.x-500 ... target.x+500).extended()
+		let y12 = (target.y-40 ... target.y).extended()
+
 		guard x12 ~= lander.X && y12 ~= lander.Y else {
 			return false
 		}
@@ -273,6 +250,75 @@ extension World {
 		return true
 	}
 }
+
+// MARK: - Random helpers
+
+func xorshift128plus(seed0 : UInt64, seed1 : UInt64) -> () -> UInt64 {
+	var s0 = seed0
+	var s1 = seed1
+	if s0 == 0 && s1 == 0 {
+		s1 =  1 // The state must be seeded so that it is not everywhere zero.
+	}
+
+	return {
+		var x = s0
+		let y = s1
+		s0 = y
+		x ^= x << 23
+		x ^= x >> 17
+		x ^= y
+		x ^= y >> 26
+		s1 = x
+		return s0 &+ s1
+	}
+
+}
+
+struct Random {
+
+	let generator = xorshift128plus(seed0: 232323232323, seed1: 123987345675)
+
+	func bounded(to max: UInt64) -> UInt64 {
+		var u: UInt64 = 0
+		let b: UInt64 = (u &- max) % max
+		repeat {
+			u = generator()
+		} while u < b
+		return u % max
+	}
+
+	/// Random value for `Int` in arbitrary closed range, uniformally distributed
+	subscript(range: CountableClosedRange<Int>) -> Int {
+		let bound = range.upperBound.toIntMax() - range.lowerBound.toIntMax() + 1
+		let x = range.lowerBound + Int(bounded(to: UInt64(bound)))
+
+		guard range.contains(x) else { fatal("out of range") }
+		return x
+	}
+
+	/// Random value for `Double` in arbitrary closed range
+	subscript(range: ClosedRange<Double>) -> Double {
+		let step = (range.upperBound - range.lowerBound) / Double(UInt64.max)
+
+		let value = range.lowerBound + step*Double(generator())
+		guard range.contains(value) else { fatal("out of range") }
+
+		return value
+	}
+
+	/// Random value for `Double` in arbitrary half-open range
+	subscript(range: Range<Double>) -> Double {
+		let step = (range.upperBound - range.lowerBound) / (1.0 + Double(UInt64.max))
+
+		let value = range.lowerBound + step*Double(generator())
+		guard range.contains(value) else { fatal("out of range") }
+
+		return value
+	}
+
+}
+
+let random = Random()
 
 struct Chromosome {
 
@@ -294,7 +340,7 @@ extension Chromosome {
 			genes.removeFirst()
 		}
 		if genes.isEmpty {
-			genes.insert((Action(rotate: 0, power: 0), duration: Chromosome.maxTTL), atIndex: 0)
+			genes.insert((Action(rotate: 0, power: 0), duration: Chromosome.maxTTL), at: 0)
 			ttl = -1
 		} else {
 			ttl -= 1
@@ -320,17 +366,17 @@ struct Generation {
 extension Generation {
 
 	mutating func evalTTL() {
-		for (currentIndex, sample) in current.enumerate() {
+		for (currentIndex, sample) in current.enumerated() {
 			guard sample.ttl < 0 else { continue }
 
 			evalTTL(&current[currentIndex])
 		}
 	}
 
-	private mutating func evalTTL(inout chromosome: Chromosome) {
+	fileprivate mutating func evalTTL(_ chromosome: inout Chromosome) {
 		var evolvingLander = lander
 		var ttl = 0
-		for (geneIndex, (action: action, duration: duration)) in chromosome.genes.enumerate() {
+		for (geneIndex, (action: action, duration: duration)) in chromosome.genes.enumerated() {
 			for turnSameAction in 0..<duration {
 				ttl += 1
 				let nextLander = world.simulate(marsLander: evolvingLander, action: action)
@@ -364,13 +410,12 @@ extension Generation {
 extension Generation {
 
 	func generateRandomAction() -> Chromosome.Action {
-		return Chromosome.Action(rotate: random() % 181 - 90, power: random() % 5)
+		return Chromosome.Action(rotate: random[-90...90], power: random[0...4])
 	}
 
-	mutating func aaa() {
-		current.removeAll()
+	mutating func populateToLimitWithRandom() {
 		current.reserveCapacity(populationLimit * 2)
-		for _ in 0..<populationLimit {
+		for _ in current.count..<populationLimit {
 			let newChromosome = Chromosome(
 				genes: [(action: generateRandomAction(), duration: Chromosome.maxTTL)],
 				ttl: -1)
@@ -381,121 +426,144 @@ extension Generation {
 	}
 
 	mutating func reducePopulation() {
-		guard current.count > populationLimit else { return }
-
-		current.sortInPlace{ (a, b) in a.ttl > b.ttl }
-		current.removeRange(populationLimit..<current.count)
-	}
-}
-
-struct RandomDoubleGenerator {
-	private init() { srand48(Int(arc4random())) }
-	static let singleton = RandomDoubleGenerator()
-}
-
-//! Get double in desired interval
-extension RandomDoubleGenerator {
-
-	struct Arc4Ranges {
-		static let СlosedDenominator: Double = Double(UInt32.max)
-		static let HalfOpenDenominator: Double = Double(Int64(UInt32.max) + 1)
+		reducePopulation(populationLimit)
 	}
 
-	subscript(interval: ClosedInterval<Double>) -> Double {
-		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.СlosedDenominator
-		let width = interval.end - interval.start
-		let scaled = normalized * width
+	mutating func reducePopulation(_ limit: Int) {
+		guard current.count > limit else { return }
 
-		return interval.start + scaled
+		current.sort{ (a, b) in a.ttl > b.ttl }
+		current.removeSubrange(limit..<current.count)
 	}
 
-	subscript(interval: HalfOpenInterval<Double>) -> Double {
-		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.HalfOpenDenominator
-		let width = interval.end - interval.start
-		let scaled = normalized * width
+	func bestChomosome() -> Chromosome { return current.first! }
 
-		return interval.start + scaled
-	}
-}
-
-extension IntervalType {
-
-	public var hashValue: Int {
-		if let start = self.start as? NSObject, let end = self.end as? NSObject {
-			let halfshift = sizeof(Int)*4
-			return start.hashValue ^ ((end.hashValue << halfshift) | (end.hashValue >> halfshift))
-		} else {
-			return 0
+	mutating func nextTurn(marsLander next: MarsLander) {
+		lander = next
+		for i in 0..<current.count {
+			current[i].incrementAge()
 		}
 	}
 }
 
-extension HalfOpenInterval: Hashable {}
-extension ClosedInterval: Hashable {}
-
-//("a"..."b" as ClosedInterval).hashValue
-//(0...1 as ClosedInterval).hashValue
-//(1e-2...1e+3 as ClosedInterval).hashValue
+//struct RandomDoubleGenerator {
+//	private init() { srand48(Int(arc4random())) }
+//	static let singleton = RandomDoubleGenerator()
+//}
 //
-//(0.0..<1.0).hashValue
-//(1.0..<2.0).hashValue
-//(2.0..<3.0).hashValue
-//(0.0..<1.0)==(1.0..<2.0)
+////! Get double in desired interval
+//extension RandomDoubleGenerator {
 //
-//var dictionary = [
-//	0.0..<1.0 : "Okay",
-//	1.0..<2.0 : "Better",
-//	2.0..<3.0 : "Perfect"]
-//var dict2: Dictionary<HalfOpenInterval<Double>, String> = [
-//	0.0..<1.0 : "Okay",
-//	1.0..<2.0 : "Better",
-//	2.0..<3.0 : "Perfect"]
+//	struct Arc4Ranges {
+//		static let СlosedDenominator: Double = Double(UInt32.max)
+//		static let HalfOpenDenominator: Double = Double(Int64(UInt32.max) + 1)
+//	}
 //
-//var dict3: Dictionary<HalfOpenInterval<Double>, String> = [:]
-//dict3[0.0..<1.0] = "Meh"
+//	subscript(interval: ClosedInterval<Double>) -> Double {
+//		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.СlosedDenominator
+//		let width = interval.end - interval.start
+//		let scaled = normalized * width
 //
-//for (range, value) in dict3 {
-//	print("\(value) is assign to \(range)")
+//		return interval.start + scaled
+//	}
+//
+//	subscript(interval: HalfOpenInterval<Double>) -> Double {
+//		let normalized = Double(arc4random()) / RandomDoubleGenerator.Arc4Ranges.HalfOpenDenominator
+//		let width = interval.end - interval.start
+//		let scaled = normalized * width
+//
+//		return interval.start + scaled
+//	}
 //}
 
+//extension IntervalType {
+//
+//	public var hashValue: Int {
+//		if let start = self.start as? NSObject, let end = self.end as? NSObject {
+//			let halfshift = MemoryLayout<Int>.size*4
+//			return start.hashValue ^ ((end.hashValue << halfshift) | (end.hashValue >> halfshift))
+//			//infix operator .--> {
+//			//associativity left
+//			//precedence 152
+//			//}
+//			////! Apply operation using dot syntax
+//			//public func .--> <U, V>(arg: U, transform: (U) -> V ) -> V {
+//			//    return transform(arg)
+//			//}
+//		} else {
+//			return 0
+//		}
+//	}
+//}
+//
+//extension Range: Hashable {}
+//extension ClosedRange: Hashable {}
 
-struct WeightedRandom<T> {
-
-	private var probabilityMap: [HalfOpenInterval<Double> : T] = [:]
-	private var weightSum = 0.0
-}
-
-enum WeightedRandomError : ErrorType {
-	case InvalidArgument
-}
-
-extension WeightedRandom {
-
-	mutating func add(value: T, weight: Double) throws {
-		guard weight.isNormal && weight > 0 else { throw WeightedRandomError.InvalidArgument }
-
-		let newWeightSum = weightSum + weight
-		probabilityMap[weightSum ..< newWeightSum] = value
-		weightSum = newWeightSum
-	}
-
-	func getRandomObject() -> T? {
-		guard !probabilityMap.isEmpty else { return nil }
-
-		let randomizer = RandomDoubleGenerator.singleton
-		randomizer[0 ..< weightSum]
-		// TODO:
-		return nil
-	}
-}
+//
+////("a"..."b" as ClosedInterval).hashValue
+////(0...1 as ClosedInterval).hashValue
+////(1e-2...1e+3 as ClosedInterval).hashValue
+////
+////(0.0..<1.0).hashValue
+////(1.0..<2.0).hashValue
+////(2.0..<3.0).hashValue
+////(0.0..<1.0)==(1.0..<2.0)
+////
+////var dictionary = [
+////	0.0..<1.0 : "Okay",
+////	1.0..<2.0 : "Better",
+////	2.0..<3.0 : "Perfect"]
+////var dict2: Dictionary<HalfOpenInterval<Double>, String> = [
+////	0.0..<1.0 : "Okay",
+////	1.0..<2.0 : "Better",
+////	2.0..<3.0 : "Perfect"]
+////
+////var dict3: Dictionary<HalfOpenInterval<Double>, String> = [:]
+////dict3[0.0..<1.0] = "Meh"
+////
+////for (range, value) in dict3 {
+////	print("\(value) is assign to \(range)")
+////}
+//
+//
+////struct WeightedRandom<T> {
+////
+////	private var probabilityMap: [HalfOpenInterval<Double> : T] = [:]
+////	private var weightSum = 0.0
+////}
+////
+////enum WeightedRandomError : ErrorType {
+////	case InvalidArgument
+////}
+////
+////extension WeightedRandom {
+////
+////	mutating func add(value: T, weight: Double) throws {
+////		guard weight.isNormal && weight > 0 else { throw WeightedRandomError.InvalidArgument }
+////
+////		let newWeightSum = weightSum + weight
+////		probabilityMap[weightSum ..< newWeightSum] = value
+////		weightSum = newWeightSum
+////	}
+////
+////	func getRandomObject() -> T? {
+////		guard !probabilityMap.isEmpty else { return nil }
+////
+////		let randomizer = RandomDoubleGenerator.singleton
+////		randomizer[0 ..< weightSum]
+////		// TODO:
+////		return nil
+////	}
+////}
 
 let world = World.parseFromInput()
 var action: MarsLander.Action!
 var landerExpected: MarsLander!
+var generation: Generation!
 for turn in 0..<3000 {
 	defer {
 		print("\(action.rotate) \(action.power)")
-		log("Expect Mars Lander: \(landerExpected)")
+		log("Expect Mars Lander: \(landerExpected!)")
 	}
 
 	guard feof(stdin) == 0 else {
@@ -505,42 +573,34 @@ for turn in 0..<3000 {
 	var lander = MarsLander(parseFromInput: line)!
 	log("Read   Mars Lander: \(lander)")
 	if let landerExpected = landerExpected {
-		if lander ~== landerExpected {
+		if lander - landerExpected < 1.0 {
 			lander = landerExpected
 		} else {
 			log("Not close to expected, using data from input")
 		}
 	}
 
-	let testAngle = { (angle: Int) in dist( lander.rotate, angle ) < 90 ? true : false }
+	let testAngle = { (angle: Int) in abs(lander.rotate - angle) < 90 ? true : false }
 
 	if turn == 0 {
 		log("Calculating traectory \((lander.X, lander.Y)) -> \(world.target): ...")
+		generation = Generation(world: world, lander: lander)
+		for _ in 0..<30 {
+			generation.reducePopulation(generation.populationLimit/2)
+			generation.populateToLimitWithRandom()
+			generation.evalTTL()
+		}
+	} else {
+		generation.nextTurn(marsLander: lander)
+		generation.evalTTL()
+		for _ in 0..<20 {
+			generation.reducePopulation(generation.populationLimit/2)
+			generation.populateToLimitWithRandom()
+			generation.evalTTL()
+		}
 	}
 
-	let altitude = lander.Y - Double(world.target.y)
-	// alt*a + (40*40)/2 = v*v/2
-	let minVSpeed = 7-Int(sqrt(Double(altitude)*world.a_land*2.0 + 1500))
-	log("altitude = \(altitude) minVSpeed = \(minVSpeed)")
-
-	if altitude + lander.vSpeed < 4 - lander.vSpeed {
-		log("prepare for hard landing!!!")
-		action = MarsLander.Action(rotate: 0, power: 0)
-		continue
-	}
-
-	let freefall = Int(world.freefallTime(vSpeed: Double(lander.vSpeed), altitude: Double(altitude))*1.2+5)
-
-	// final stage
-	switch (lander.hSpeed, lander.vSpeed, altitude) {
-	case _ where lander.vSpeed >= 0 : action = MarsLander.Action(rotate: 0, power: 0)
-	case _ where lander.vSpeed < -38 : action = MarsLander.Action(rotate: 0, power: 4)
-	case _ where lander.hSpeed < -2: action = MarsLander.Action(rotate: -8, power: 3)
-	case _ where lander.hSpeed > 2: action = MarsLander.Action(rotate: 8, power: 3)
-	case _ where (-30 ..< 0) ~= lander.vSpeed: action = MarsLander.Action(rotate: 0, power: 0)
-	case _ where (-38 ..< -30) ~= lander.vSpeed: action = MarsLander.Action(rotate: 0, power: 3)
-	default: action = MarsLander.Action(rotate: 0, power: 4)
-	}
+	action = generation.bestChomosome().genes[0].action
 
 	landerExpected = world.simulate(marsLander: lander, action: action)
 }
