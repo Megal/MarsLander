@@ -108,14 +108,24 @@ extension MarsLander {
 
 extension MarsLander {
 
-	struct Action {
+	struct Action: Hashable {
 		let rotate, power: Int
+
+		// MARK: - Hashable
+		var hashValue: Int {
+			return (90 + rotate) + power << 8
+		}
+
+		// MARK: - Equatable
+		static func ==(lhs: Action, rhs: Action) -> Bool {
+			return lhs.rotate == rhs.rotate && lhs.power == rhs.power
+		}
 	}
 
 	func clamped(action: Action) -> Action {
 
 		let rotateClamp = (-90...90).clamped(to: rotate-15 ... rotate+15)
-		let powerClamp = (0...4).clamped(to: power-1 ... power+1)
+		let powerClamp = (power-1 ... power+1).clamped(to: 0...fuel).clamped(to: 0...4)
 
 		return Action(
 			rotate: rotateClamp.clamp(action.rotate),
@@ -352,6 +362,11 @@ struct Chromosome {
 
 extension Chromosome {
 
+	var totalLength: Int {
+
+		return genes.reduce(0) { $0 + $1.duration }
+	}
+
 	mutating func incrementAge() {
 		genes[0].duration -= 1
 		if genes[0].duration < 1 {
@@ -362,6 +377,7 @@ extension Chromosome {
 			ttl = -1
 		} else {
 			ttl -= 1
+			genes[genes.count-1].duration += 1
 		}
 	}
 
@@ -380,7 +396,9 @@ extension Chromosome {
 			}
 		}
 
-		return Chromosome(genes: copyGenes, ttl: -1, blackBox: nil)
+		var prefix = Chromosome(genes: copyGenes, ttl: -1, blackBox: nil)
+		prefix.appendNeutralTail()
+		return prefix
 	}
 
 	func suffix(from: Int) -> Chromosome {
@@ -422,19 +440,44 @@ extension Chromosome {
 				let cutLength = tailSkippedLength + gene.duration - cutPoint
 				let copingGene = (action: gene.action, duration: cutLength)
 				copied.append(copingGene)
-				tailSkippedLength += cutLength
+				tailSkippedLength += gene.duration
 			} else {
 				tailSkippedLength += gene.duration
 			}
 		}
 
-		return Chromosome(genes: copied, ttl: -1, blackBox: nil)
+		let combined = Chromosome(genes: copied, ttl: -1, blackBox: nil)
+		if combined.totalLength != maxTTL {
+			log("chromosome has bad length = \(combined.totalLength)")
+		}
+		return combined
+	}
+
+	mutating func appendNeutralTail() {
+		let total = totalLength
+		guard total < Chromosome.maxTTL else { return }
+
+		let neutralTail = (action: Chromosome.neutralGene.action, duration: Chromosome.maxTTL-totalLength)
+		if genes.isEmpty {
+			genes.append(neutralTail)
+		}
+		else if genes.last!.action == neutralTail.action {
+			genes[genes.count-1].duration += neutralTail.duration
+		}
+		else {
+			genes.append(neutralTail)
+		}
 	}
 }
 
 
 struct Generation {
-	var current: [Chromosome] = []
+	var current: [Chromosome] = {
+		var current: [Chromosome] = []
+		current.reserveCapacity(50)
+
+		return current
+	}()
 	var fitnessScore: [Double] = []
 
 	let populationLimit = 20
@@ -572,8 +615,8 @@ extension Generation {
 					} else {
 						chromosome.ttl = ttl
 						chromosome.blackBox = nextLander
-						return
 					}
+					return
 				}
 			}
 		}
@@ -607,11 +650,13 @@ extension Generation {
 
 	mutating func addMutantsWithRandomTailOrHead() {
 		let countBeforeMutation = current.count
+		current.append(contentsOf: repeatElement(Chromosome(), count: 3*countBeforeMutation))
 		for i in 0..<countBeforeMutation {
 			let sample = current[i]
-			current.append(makeMutant(sample, species: .HeadMutant))
-			current.append(makeMutant(sample, species: .TailMutant))
-			current.append(makeMutant(sample, species: .BodyMutant))
+
+			current[countBeforeMutation+3*i+0] = makeMutant(sample, species: .HeadMutant)
+			current[countBeforeMutation+3*i+1] = makeMutant(sample, species: .TailMutant)
+			current[countBeforeMutation+3*i+2] = makeMutant(sample, species: .BodyMutant)
 		}
 
 		fitnessScored = false
@@ -696,12 +741,15 @@ for turn in 0..<3000 {
 		log("Expect Mars Lander: \(landerExpected!)")
 	}
 
-	guard feof(stdin) == 0 else {
-		break
+	var lander: MarsLander
+	if feof(stdin) == 0 {
+		lander = MarsLander(parseFromInput: readLine()!)!
+		log("Read   Mars Lander: \(lander)")
 	}
-	let line = readLine()!
-	var lander = MarsLander(parseFromInput: line)!
-	log("Read   Mars Lander: \(lander)")
+	else {
+		lander = landerExpected
+	}
+
 	if let landerExpected = landerExpected {
 		if lander - landerExpected < 2.0 {
 			lander = landerExpected
@@ -781,7 +829,7 @@ for turn in 0..<3000 {
 		generation.incrementAge(marsLander: lander)
 		generation.evalTTL()
 		generation.evolution(cycles: 3)
-		log("fitnessScore = \(generation.fitnessScore)")
+		log("fitnessScore = \(generation.fitnessScore.prefix(upTo: 6).map{MarsLander.doubleFormatter($0)})")
 	}
 
 	let best = generation.bestChomosome()
